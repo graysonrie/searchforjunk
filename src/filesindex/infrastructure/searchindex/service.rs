@@ -1,9 +1,15 @@
-use std::{fs, path::PathBuf};
-use tantivy::{collector::TopDocs, query::FuzzyTermQuery, schema::Schema, Document, Index, IndexWriter, TantivyDocument, TantivyError};
+use std::{fs, future::Future, path::PathBuf};
+use tantivy::{
+    collector::TopDocs, query::FuzzyTermQuery, schema::Schema, Document, Index, IndexWriter,
+    TantivyDocument, TantivyError,
+};
 
 use crate::filesindex::{api::dtos::file_dto::FileDTO, file_indexer_config::FileIndexerConfig};
 
-use super::{file_indexer::index_file, models::query_result_model::QueryResult, schemas::file_schema::create_schema};
+use super::{
+    file_indexer::index_files, models::query_result_model::QueryResult,
+    schemas::file_schema::create_schema,
+};
 
 pub struct SearchIndexService {
     schema: Schema,
@@ -24,7 +30,7 @@ impl SearchIndexService {
         } else {
             // If the index directory doesn't exist, create a new index
             println!("Creating a new index at {:?}", index_path);
-            fs::create_dir_all(index_path.clone()); // Ensure the directory exists
+            fs::create_dir_all(index_path.clone()).expect("could not create output directory");
             Index::create_in_dir(index_path, schema.clone())
         };
         let index = index.unwrap();
@@ -38,17 +44,16 @@ impl SearchIndexService {
         }
     }
 
-    pub fn index_files(&mut self, files: Vec<&FileDTO>) {
-        for file in files.iter() {
-            index_file(&mut self.index_writer, &self.schema, file);
-        }
+    pub fn index_files(&mut self, files: Vec<&FileDTO>) -> Result<(), TantivyError> {
+        index_files(&self.index_writer, &self.schema, files)?;
+        self.index_writer.commit()?;
+        Ok(())
     }
 
-    pub fn query(&self, query_str:&str) -> Result<Vec<QueryResult>,TantivyError>{
+    pub fn query(&self, query_str: &str) -> Result<Vec<QueryResult>, TantivyError> {
         let reader = self.index.reader()?;
         let searcher = reader.searcher();
 
-        // Fuzzy search query (max_distance 1)
         let field = self.schema.get_field("file_name").unwrap();
         let term = tantivy::Term::from_field_text(field, &query_str);
 
@@ -56,9 +61,11 @@ impl SearchIndexService {
 
         let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
 
-        let results:Vec<QueryResult> = top_docs.iter().map(|x| QueryResult::new(searcher.doc(x.1).unwrap(),x.0)).collect();
+        let results: Vec<QueryResult> = top_docs
+            .iter()
+            .map(|x| QueryResult::new(searcher.doc(x.1).unwrap(), x.0))
+            .collect();
 
         Ok(results)
     }
-
 }
