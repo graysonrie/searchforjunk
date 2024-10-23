@@ -1,13 +1,19 @@
-use std::{fs, future::Future, path::PathBuf};
-use tantivy::{
-    collector::TopDocs, query::FuzzyTermQuery, schema::Schema, Document, Index, IndexWriter,
-    TantivyDocument, TantivyError,
+use std::{
+    fs,
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, Mutex},
 };
+use tantivy::{
+    collector::TopDocs, query::FuzzyTermQuery, schema::Schema, Index, IndexWriter,
+    TantivyError,
+};
+use tokio::{sync::mpsc, task};
 
 use crate::filesindex::{api::dtos::file_dto::FileDTO, file_indexer_config::FileIndexerConfig};
 
 use super::{
-    file_indexer::index_files, models::query_result_model::QueryResult,
+    file_indexer::index_files, models::query_result_model::QueryResult, queue::index_worker,
     schemas::file_schema::create_schema,
 };
 
@@ -15,7 +21,7 @@ pub struct SearchIndexService {
     schema: Schema,
     tantivy_out_path: PathBuf,
     index: Index,
-    index_writer: IndexWriter,
+    index_writer: Arc<Mutex<IndexWriter>>,
 }
 
 impl SearchIndexService {
@@ -36,18 +42,14 @@ impl SearchIndexService {
         let index = index.unwrap();
         let index_writer = index.writer(config.buffer_size).unwrap();
 
+        let writer_clone = Arc::new(Mutex::new(index_writer));
+
         Self {
             schema,
             tantivy_out_path: config.tantivy_out_path.clone(),
             index,
-            index_writer,
+            index_writer: writer_clone,
         }
-    }
-
-    pub fn index_files(&mut self, files: Vec<&FileDTO>) -> Result<(), TantivyError> {
-        index_files(&self.index_writer, &self.schema, files)?;
-        self.index_writer.commit()?;
-        Ok(())
     }
 
     pub fn query(&self, query_str: &str) -> Result<Vec<QueryResult>, TantivyError> {
@@ -67,5 +69,16 @@ impl SearchIndexService {
             .collect();
 
         Ok(results)
+    }
+
+    pub fn set_up_queue_pipeline(&self) -> mpsc::Sender<FileDTO> {
+        let (sender, receiver) = mpsc::channel::<FileDTO>(32);
+        let index_writer_clone = Arc::clone(&self.index_writer);
+        let schema_clone = self.schema.clone();
+
+        tokio::spawn(async move {
+            index_worker::index_worker(receiver, index_writer_clone, schema_clone).await
+        });
+        sender
     }
 }
