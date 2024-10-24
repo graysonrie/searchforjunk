@@ -9,5 +9,6 @@ pub struct FileDTOInput {
     pub file_path: String,
     pub metadata: String,
     pub date_modified: u64, // UNIX timestamp
+    pub popularity:f64,
 }
 

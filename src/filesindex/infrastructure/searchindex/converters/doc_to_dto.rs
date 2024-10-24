@@ -7,7 +7,7 @@ use tantivy::{
 
 use crate::filesindex::api::dtos::output::file_dto_output::FileDTOOutput;
 
-pub fn doc_to_dto(doc: TantivyDocument, schema: &Schema, score: f32) -> FileDTOOutput {
+pub fn doc_to_dto(doc: TantivyDocument, schema: &Schema, score: f64) -> FileDTOOutput {
     let mut name = String::new();
     let mut file_path = String::new();
     let mut metadata = String::new();

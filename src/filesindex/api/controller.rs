@@ -65,7 +65,8 @@ impl FilesIndexController {
         let service = self.service.lock().await;
         let result = match service.advanced_query(&dto) {
             Ok(result) => result,
-            Err(_) => {
+            Err(err) => {
+                println!("failed to execute query: {}", err);
                 return HttpResponse::BadRequest().body("Failed to execute query.");
             }
         };

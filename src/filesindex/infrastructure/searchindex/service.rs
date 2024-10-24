@@ -1,9 +1,9 @@
 use std::{fs, future::Future, path::PathBuf, sync::Arc};
 use tantivy::{
     collector::TopDocs,
-    query::{BooleanQuery, FuzzyTermQuery, Occur, QueryParser, RangeQuery, TermQuery},
-    schema::Schema,
-    DateTime, Index, IndexReader, IndexWriter, TantivyError, Term,
+    query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, RangeQuery, TermQuery},
+    schema::{Facet, Schema, Value},
+    DateTime, Index, IndexReader, IndexWriter, TantivyDocument, TantivyError, Term,
 };
 use tokio::{
     sync::{mpsc, Mutex},
@@ -16,10 +16,8 @@ use crate::filesindex::{
 };
 
 use super::{
-    converters::doc_to_dto::doc_to_dto,
-    models::{query_result_model::QueryResult, search_params_model::SearchParamsModel},
-    queue::index_worker,
-    schemas::file_schema::create_schema,
+    converters::doc_to_dto::doc_to_dto, models::search_params_model::SearchParamsModel,
+    queue::index_worker, schemas::file_schema::create_schema,
 };
 
 pub struct SearchIndexService {
@@ -27,6 +25,7 @@ pub struct SearchIndexService {
     index: Index,
     index_writer: Arc<Mutex<IndexWriter>>,
     index_reader: IndexReader,
+    config: FileIndexerConfig
 }
 
 impl SearchIndexService {
@@ -51,6 +50,7 @@ impl SearchIndexService {
         let index_reader = index.reader().unwrap();
 
         Self {
+            config:config.clone(),
             schema,
             index,
             index_writer: writer_clone,
@@ -65,16 +65,13 @@ impl SearchIndexService {
         let schema = &self.schema;
         let searcher = self.index_reader.searcher();
 
-        let mut queries = Vec::new();
+        let mut queries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
 
         if let Some(file_path) = &search_params.file_path {
             let field = schema.get_field("path").unwrap();
-            let term = Term::from_field_text(field, file_path);
-            let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
-            queries.push((
-                Occur::Must,
-                Box::new(query) as Box<dyn tantivy::query::Query>,
-            ));
+            let query_parser = QueryParser::for_index(&searcher.index(), vec![field]);
+            let query = query_parser.parse_query(&file_path)?;
+            queries.push((Occur::Should, Box::new(query)));
         }
 
         if let Some(query_str) = &search_params.name {
@@ -104,52 +101,37 @@ impl SearchIndexService {
         // Execute the query and collect the results
         let top_docs = searcher.search(&boolean_query, &TopDocs::with_limit(10))?;
 
+        let popularity_field = schema.get_field("popularity").unwrap();
         let results: Vec<FileDTOOutput> = top_docs
-            .iter()
+            .into_iter()
             .map(|(_score, doc_address)| {
-                let doc = searcher.doc(*doc_address).unwrap();
-                doc_to_dto(doc, &schema, _score.clone())
+                let doc: TantivyDocument = searcher.doc(doc_address).unwrap();
+
+                let popularity = doc
+                    .get_first(popularity_field)
+                    .and_then(|field_val| field_val.as_f64())
+                    .unwrap_or(1.0); // Default to 1 if no popularity
+
+                doc_to_dto(doc, &schema, self.apply_popularity(_score, popularity))
             })
             .collect();
 
         Ok(results)
     }
 
-    pub fn basic_query(
-        &self,
-        search_term: &str,
-        query_str: &str,
-    ) -> Result<Vec<FileDTOOutput>, TantivyError> {
-        let reader = &self.index_reader;
-        let searcher = reader.searcher();
-
-        let field = self.schema.get_field(search_term)?;
-        let query_parser = QueryParser::for_index(&self.index, vec![field]);
-
-        let query = query_parser.parse_query(query_str)?;
-
-        // Execute the query with more advanced scoring (BM25 by default)
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
-
-        let results: Result<Vec<FileDTOOutput>, TantivyError> = top_docs
-            .iter()
-            .map(|x| {
-                let doc = searcher.doc(x.1)?;
-                Ok(doc_to_dto(doc, &self.schema, x.0))
-            })
-            .collect();
-
-        results
-    }
-
     pub fn set_up_queue_pipeline(&self) -> mpsc::Sender<FileDTOInput> {
         let (sender, receiver) = mpsc::channel::<FileDTOInput>(32);
         let index_writer_clone = Arc::clone(&self.index_writer);
         let schema_clone = self.schema.clone();
+        let batch_size=  self.config.indexer_batch_size;
 
         tokio::spawn(async move {
-            index_worker::index_worker(receiver, index_writer_clone, schema_clone).await
+            index_worker::index_worker(receiver, index_writer_clone, schema_clone, batch_size).await
         });
         sender
+    }
+
+    fn apply_popularity(&self, existing_score: f32, popularity_score: f64) -> f64 {
+        (existing_score as f64) + popularity_score.log(10.0)
     }
 }

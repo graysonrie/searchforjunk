@@ -1,10 +1,16 @@
 use crate::filesindex::{
     api::dtos::input::file_dto_input::FileDTOInput,
-    infrastructure::searchindex::converters::date_converter::unix_time_to_tantivy_datetime,
+    infrastructure::searchindex::converters::{
+        date_converter::unix_time_to_tantivy_datetime, path_to_facet::windows_path_to_facet,
+    },
 };
 
-use std::{sync::Arc, time::Duration};
-use tantivy::{doc, schema::Schema, IndexWriter, TantivyError};
+use std::{path::Path, sync::Arc, time::Duration};
+use tantivy::{
+    doc,
+    schema::{Facet, Schema},
+    Document, IndexWriter, TantivyDocument, TantivyError,
+};
 use tokio::{
     sync::{mpsc, Mutex},
     task,
@@ -14,9 +20,9 @@ pub async fn index_worker(
     mut rx: mpsc::Receiver<FileDTOInput>,
     index_writer: Arc<Mutex<IndexWriter>>,
     schema: Schema,
+    batch_size:usize,
 ) {
-    let mut batch_on: u32 = 0;
-    let batch_size: u32 = 16;
+    let mut batch_on: usize = 0;
 
     while let Some(dto) = rx.recv().await {
         {
@@ -34,6 +40,8 @@ pub async fn index_worker(
             {
                 let writer = index_writer.lock().await;
 
+                //let formatted_facet_path = windows_path_to_facet(&dto.file_path);
+
                 writer
                 .add_document(doc!(
                     schema.get_field("file_id").unwrap() => dto.file_id,
@@ -41,6 +49,7 @@ pub async fn index_worker(
                     schema.get_field("date_modified").unwrap() => unix_time_to_tantivy_datetime(dto.date_modified),
                     schema.get_field("path").unwrap() => dto.file_path,
                     schema.get_field("metadata").unwrap() => dto.metadata,
+                    schema.get_field("popularity").unwrap() => dto.popularity,
                 ))
                 .unwrap(); // Consider proper error handling here
 
@@ -60,6 +69,16 @@ pub async fn index_worker(
             println!("Final writer commit attempt failed: {}", e)
         }
     }
+}
+
+fn build_facet_from_file_path(path: &str) -> Facet {
+    let path = Path::new(path);
+    let mut facet_path = String::from("/");
+    for component in path.components() {
+        facet_path.push_str(&component.as_os_str().to_string_lossy());
+        facet_path.push('/');
+    }
+    Facet::from(&facet_path)
 }
 
 async fn commit_and_retry(writer: Arc<Mutex<IndexWriter>>) -> Result<(), TantivyError> {
