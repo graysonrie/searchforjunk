@@ -1,14 +1,14 @@
-use tantivy::schema::{Schema, TEXT, STORED, INDEXED};
+use tantivy::schema::{Schema, INDEXED, STORED, TEXT};
 
 pub fn create_schema() -> Schema {
     let mut schema_builder = Schema::builder();
+
+    schema_builder.add_text_field("file_id", TEXT | STORED); // UID
     
-    // Add fields to the schema
-    schema_builder.add_text_field("file_name", TEXT | STORED);   // File name
-    schema_builder.add_text_field("metadata", TEXT | STORED);    // Custom metadata
-    schema_builder.add_date_field("date_created", INDEXED | STORED); // Date created
-    schema_builder.add_date_field("date_modified", INDEXED | STORED); // Date modified
-    schema_builder.add_text_field("file_content", TEXT | STORED); // File content, optional
+    schema_builder.add_text_field("name", TEXT | STORED); 
+    schema_builder.add_date_field("date_modified", INDEXED | STORED); 
+    schema_builder.add_text_field("metadata", TEXT| STORED);
+    schema_builder.add_text_field("path", TEXT | STORED); 
 
     schema_builder.build()
 }

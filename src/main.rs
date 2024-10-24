@@ -8,7 +8,7 @@ mod filesindex;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let index_path = r"D:\tantivy-out22";
+    let index_path = r"H:\tantivy-out";
     let buffer_size: usize = 50_000_000;
 
     let port = "127.0.0.1:8080";
@@ -20,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         // Clone the shared Arc for each worker
         let app = App::new();
-        let service_clone = search_index_service.clone();   
+        let service_clone = search_index_service.clone();
         let controller = Arc::new(FilesIndexController::new(service_clone));
 
         let app = controller.map_routes(app);
