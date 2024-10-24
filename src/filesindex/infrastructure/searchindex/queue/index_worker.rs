@@ -3,9 +3,12 @@ use crate::filesindex::{
     infrastructure::searchindex::converters::date_converter::unix_time_to_tantivy_datetime,
 };
 
-use std::sync::{Arc, Mutex};
-use tantivy::{doc, schema::Schema, IndexWriter};
-use tokio::{sync::mpsc, task};
+use std::{sync::Arc, time::Duration};
+use tantivy::{doc, schema::Schema, IndexWriter, TantivyError};
+use tokio::{
+    sync::{mpsc, Mutex},
+    task,
+};
 
 pub async fn index_worker(
     mut rx: mpsc::Receiver<FileDTOInput>,
@@ -19,7 +22,7 @@ pub async fn index_worker(
         {
             // Lock the writer once per loop iteration
             let file_removed =
-                remove_file_from_index(index_writer.clone(), &schema, &dto.file_path);
+                remove_file_from_index(index_writer.clone(), &schema, &dto.file_path).await;
             match file_removed {
                 Ok(_) => {}
                 Err(err) => {
@@ -27,9 +30,11 @@ pub async fn index_worker(
                 }
             }
 
-            let mut writer = index_writer.lock().unwrap();
+            // Lock the writer only while adding the document
+            {
+                let writer = index_writer.lock().await;
 
-            writer
+                writer
                 .add_document(doc!(
                     schema.get_field("file_id").unwrap() => dto.file_id,
                     schema.get_field("name").unwrap() => dto.name,
@@ -38,29 +43,55 @@ pub async fn index_worker(
                     schema.get_field("metadata").unwrap() => dto.metadata,
                 ))
                 .unwrap(); // Consider proper error handling here
-            batch_on += 1;
+
+                batch_on += 1;
+            } // Release the lock after adding the document
 
             if batch_on >= batch_size {
-                println!("writer commit");
-                writer.commit().unwrap();
+                let _ = commit_and_retry(index_writer.clone()).await;
                 batch_on = 0;
             }
         }
     }
 
     if batch_on > 0 {
-        println!("writer commit");
-        index_writer.lock().unwrap().commit().unwrap();
+        let result = commit_and_retry(index_writer.clone()).await;
+        if let Err(e) = result {
+            println!("Final writer commit attempt failed: {}", e)
+        }
     }
 }
 
-fn remove_file_from_index(
+async fn commit_and_retry(writer: Arc<Mutex<IndexWriter>>) -> Result<(), TantivyError> {
+    let retry_attempts = 3;
+    for attempt in 1..=retry_attempts {
+        match writer.lock().await.commit() {
+            Ok(_) => break, // Success, exit the loop
+            Err(e) if attempt < retry_attempts => {
+                println!("Commit failed on attempt {}, retrying: {:?}", attempt, e);
+                tokio::time::sleep(Duration::from_millis(500)).await; // Add delay
+            }
+            Err(e) => {
+                println!("Commit failed after {} attempts: {:?}", retry_attempts, e);
+                return Err(e);
+            }
+        }
+    }
+    println!("writer commit");
+    return Ok(());
+}
+
+async fn remove_file_from_index(
     index_writer: Arc<Mutex<IndexWriter>>,
     schema: &Schema,
     file_path: &str,
 ) -> tantivy::Result<()> {
-    let index_writer = index_writer.lock()?;
-    let file_path_field = schema.get_field("file_id").unwrap();
-    index_writer.delete_term(tantivy::Term::from_field_text(file_path_field, file_path));
-    Ok(())
+    let index_writer = index_writer.lock().await;
+    match schema.get_field("file_id") {
+        Ok(field) => {
+            index_writer.delete_term(tantivy::Term::from_field_text(field, file_path));
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }

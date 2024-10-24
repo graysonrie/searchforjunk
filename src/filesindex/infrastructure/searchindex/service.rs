@@ -1,16 +1,14 @@
-use std::{
-    fs,
-    future::Future,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fs, future::Future, path::PathBuf, sync::Arc};
 use tantivy::{
     collector::TopDocs,
     query::{BooleanQuery, FuzzyTermQuery, Occur, QueryParser, RangeQuery, TermQuery},
     schema::Schema,
     DateTime, Index, IndexReader, IndexWriter, TantivyError, Term,
 };
-use tokio::{sync::mpsc, task};
+use tokio::{
+    sync::{mpsc, Mutex},
+    task,
+};
 
 use crate::filesindex::{
     api::dtos::{input::file_dto_input::FileDTOInput, output::file_dto_output::FileDTOOutput},
