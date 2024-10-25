@@ -3,12 +3,9 @@ use tantivy::{
     collector::TopDocs,
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, RangeQuery, TermQuery},
     schema::{Facet, Schema, Value},
-    DateTime, Index, IndexReader, IndexWriter, TantivyDocument, TantivyError, Term,
+    DateTime, DocId, Index, IndexReader, IndexWriter, Score, SegmentReader, TantivyDocument, Term,
 };
-use tokio::{
-    sync::{mpsc, Mutex},
-    task,
-};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::filesindex::{
     api::dtos::{input::file_dto_input::FileDTOInput, output::file_dto_output::FileDTOOutput},
@@ -18,14 +15,14 @@ use crate::filesindex::{
 use super::{
     converters::doc_to_dto::doc_to_dto, models::search_params_model::SearchParamsModel,
     queue::index_worker, schemas::file_schema::create_schema,
+    scorers::pop_scorer::apply_popularity,
 };
 
 pub struct SearchIndexService {
     schema: Schema,
-    index: Index,
     index_writer: Arc<Mutex<IndexWriter>>,
     index_reader: IndexReader,
-    config: FileIndexerConfig
+    config: FileIndexerConfig,
 }
 
 impl SearchIndexService {
@@ -50,9 +47,8 @@ impl SearchIndexService {
         let index_reader = index.reader().unwrap();
 
         Self {
-            config:config.clone(),
+            config: config.clone(),
             schema,
-            index,
             index_writer: writer_clone,
             index_reader,
         }
@@ -99,20 +95,27 @@ impl SearchIndexService {
         let boolean_query = BooleanQuery::new(queries);
 
         // Execute the query and collect the results
-        let top_docs = searcher.search(&boolean_query, &TopDocs::with_limit(10))?;
+        let top_docs = searcher.search(
+            &boolean_query,
+            &TopDocs::with_limit(10).tweak_score(|segment_reader: &SegmentReader| {
+                let popularity_field = segment_reader
+                    .fast_fields()
+                    .f64("popularity")
+                    .expect("Failed to access popularity field");
+                move |doc: DocId, original_score: Score| {
+                    // Default to 1 if no popularity
+                    let pop_score = popularity_field.first(doc).unwrap_or(1.0);
+                    let tweaked = apply_popularity(original_score, pop_score);
+                    tweaked
+                }
+            }),
+        )?;
 
-        let popularity_field = schema.get_field("popularity").unwrap();
         let results: Vec<FileDTOOutput> = top_docs
             .into_iter()
             .map(|(_score, doc_address)| {
                 let doc: TantivyDocument = searcher.doc(doc_address).unwrap();
-
-                let popularity = doc
-                    .get_first(popularity_field)
-                    .and_then(|field_val| field_val.as_f64())
-                    .unwrap_or(1.0); // Default to 1 if no popularity
-
-                doc_to_dto(doc, &schema, self.apply_popularity(_score, popularity))
+                doc_to_dto(doc, &schema, _score)
             })
             .collect();
 
@@ -123,15 +126,11 @@ impl SearchIndexService {
         let (sender, receiver) = mpsc::channel::<FileDTOInput>(32);
         let index_writer_clone = Arc::clone(&self.index_writer);
         let schema_clone = self.schema.clone();
-        let batch_size=  self.config.indexer_batch_size;
+        let batch_size = self.config.indexer_batch_size;
 
         tokio::spawn(async move {
             index_worker::index_worker(receiver, index_writer_clone, schema_clone, batch_size).await
         });
         sender
-    }
-
-    fn apply_popularity(&self, existing_score: f32, popularity_score: f64) -> f64 {
-        (existing_score as f64) + popularity_score.log(10.0)
     }
 }
