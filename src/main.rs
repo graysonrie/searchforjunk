@@ -1,5 +1,6 @@
+use actix_cors::Cors;
 use actix_web::rt::signal;
-use actix_web::{App, HttpServer};
+use actix_web::{http, App, HttpServer};
 use filesindex::api::controller::FilesIndexController;
 use filesindex::file_indexer_config::FileIndexerConfig;
 use filesindex::infrastructure::searchindex::service::SearchIndexService;
@@ -10,7 +11,7 @@ mod filesindex;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let index_path = r"H:\tantivy-out";
+    let index_path = r"C:\Users\grays\OneDrive\Desktop\angular\Rust\tantivy-out";
     let buffer_size: usize = 50_000_000;
     let indexer_batch_size: usize = 128;
 
@@ -37,9 +38,17 @@ async fn main() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         let controller_clone = controller.clone(); // Clone the controller for each worker
 
-        App::new().configure(move |cfg| {
-            controller_clone.map_routes(cfg); // This is now synchronous
-        })
+        App::new()
+            .wrap(
+                Cors::default()
+                    .allowed_origin("http://localhost:1420")
+                    .allow_any_method()
+                    .allowed_headers(vec![http::header::CONTENT_TYPE, http::header::ACCEPT])
+                    .supports_credentials(), // Allow cookies if needed
+            )
+            .configure(move |cfg| {
+                controller_clone.map_routes(cfg); // This is now synchronous
+            })
     })
     .bind(port)?
     .run();
