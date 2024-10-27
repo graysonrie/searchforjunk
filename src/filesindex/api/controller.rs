@@ -84,7 +84,7 @@ impl FilesIndexController {
                     let self_clone = Arc::clone(&self_clone);
                     let sender_clone = Arc::clone(&sender_clone);
                     async move {
-                        self_clone.index_files(files, sender_clone).await // This remains async
+                        self_clone.index_files(files, sender_clone).await 
                     }
                 }
             }),
@@ -96,7 +96,7 @@ impl FilesIndexController {
                 move |dtos| {
                     let self_clone = Arc::clone(&self_clone);
                     async move {
-                        self_clone.query(dtos).await // This remains async
+                        self_clone.query(dtos).await
                     }
                 }
             }),
