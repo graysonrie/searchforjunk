@@ -1,7 +1,8 @@
+use std::path::Path;
+
 use chrono::Utc;
 use tantivy::{
     schema::{OwnedValue, Schema},
-    time::{OffsetDateTime, UtcOffset},
     DateTime, Document, TantivyDocument,
 };
 
@@ -41,7 +42,7 @@ pub fn doc_to_dto(doc: TantivyDocument, schema: &Schema, score: f64) -> FileDTOO
             _ => {}
         }
     }
-
+    let is_dir: bool = Path::new(file_path.as_str()).is_dir();
     // Construct and return the DTO
     FileDTOOutput {
         name,
@@ -49,5 +50,6 @@ pub fn doc_to_dto(doc: TantivyDocument, schema: &Schema, score: f64) -> FileDTOO
         metadata,
         date_modified: date_modified.unwrap_or_else(|| Utc::now().to_string()),
         score,
+        is_directory: is_dir,
     }
 }

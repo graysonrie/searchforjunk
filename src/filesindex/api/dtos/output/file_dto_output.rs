@@ -9,4 +9,5 @@ pub struct FileDTOOutput {
     pub metadata: String,
     pub date_modified: String,
     pub score: f64,
+    pub is_directory:bool,
 }
