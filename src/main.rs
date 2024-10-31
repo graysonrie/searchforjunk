@@ -11,7 +11,7 @@ mod filesindex;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let index_path = r"H:\tantivy-out";
+    let index_path = r"D:\tantivy-out";
     let buffer_size: usize = 50_000_000;
     let indexer_batch_size: usize = 128;
 
