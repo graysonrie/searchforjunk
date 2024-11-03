@@ -20,7 +20,7 @@ pub async fn index_worker(
     mut rx: mpsc::Receiver<FileDTOInput>,
     index_writer: Arc<Mutex<IndexWriter>>,
     schema: Schema,
-    batch_size:usize,
+    batch_size: usize,
 ) {
     let mut batch_on: usize = 0;
 
