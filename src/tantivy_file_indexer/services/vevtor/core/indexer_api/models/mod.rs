@@ -1,0 +1,1 @@
+pub mod search_query_models;
